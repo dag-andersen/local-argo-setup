@@ -1,6 +1,8 @@
 cluster-name ?= "local-argo-setup"
 port ?= 8080
-path-to-repo ?= ../cloud-infra-deployment
+path-to-repo ?= cloud-infra-deployment
+path-to-root ?= ..
+domain ?= dagandersen.com
 
 # Kind -------
 
@@ -69,7 +71,7 @@ argo-bootstrap-creds:
 
 argo-bootstrap-apps:
 	kubectl apply -f applications.yml
-	@kubectl apply -f $(path-to-repo)/argo-bootstrap/local/bootstrap.yml
+	@kubectl apply -f $(path-to-root)/$(path-to-repo)/argo-bootstrap/local/bootstrap.yml
 
 # Utils -------
 
@@ -84,30 +86,33 @@ context:
 	@kubectl config use-context $(cluster-name)
 	@echo
 
-update:
-	rm apps.txt || true
-	rm paths.txt || true
-	rm apps.pre || true
-	argocd app list >> apps.pre
-	cat apps.pre | awk '{if (NR!=1) print $$1;}' | xargs -I {} argocd app set {} --sync-policy=none
-	cat apps.pre | grep -v "pplication-bootstrap" | awk '{if (NR!=1) print $$1;}' | xargs -I {} echo {} >> apps.txt
-	cat apps.pre | grep -v "pplication-bootstrap" | awk '{if (NR!=1) print $$1;}' | xargs -I {} argocd app get {} | grep "Path" | awk '{print $$2;}' >> paths.txt
-	sleep 3
+cleanup:
+	@rm apps.txt || true
+	@rm paths.txt || true
+	@rm apps.pre || true
+	@rm repo.txt || true
+
+update: cleanup
+	argocd app list | awk '{if (NR!=1) print $$1;}' >> apps.pre
+	cat apps.pre | xargs -I {} argocd app set {} --sync-policy=none
+	cat apps.pre | grep -v "application-bootstrap" | xargs -I {} echo {} >> apps.txt
+	cat apps.pre | grep -v "application-bootstrap" | xargs -I {} argocd app get {} | grep "Path" | awk '{print $$2;}' >> paths.txt
+	cat apps.pre | grep -v "application-bootstrap" | xargs -I {} argocd app get {} | grep "Repo" | awk '{print $$2;}' | sed 's/\// /g' | awk '{print $$4;}' >> repo.txt
+	@sleep 3
 	for i in {1..10}; do \
 		app=$$(sed -n "$$i"p apps.txt); \
 		path=$$(sed -n "$$i"p paths.txt); \
-		if [ ! -z "$$app" ] && [ ! -z "$$path" ]; then \
+		repo=$$(sed -n "$$i"p repo.txt); \
+		if [ ! -z "$$app" ] && [ ! -z "$$path" ] && [ ! -z "$$repo" ]; then \
 			echo "Removing sync policy from app: $$app"; \
-			echo "App: $$app" - Path: $(path-to-repo)/$$path; \
-			argocd app sync $$app --local=$(path-to-repo)/$$path; \
+			echo "App: $$app" - Path: $(path-to-root)/$$repo/$$path; \
+			argocd app sync $$app --local=$(path-to-root)/$$repo/$$path; \
 		fi; \
 	done
-	rm apps.txt || true
-	rm paths.txt || true
-	rm apps.pre || true
+	make cleanup
 
 replace-all-hostnames:
 	@echo "Replacing all hostnames..."
-	@find $(path-to-repo) -name "*.yml" -exec sed -i '' 's/dagandersen.com/localhost/g' {} \;
+	@find $(path-to-root)/$(path-to-repo) -name "*.yml" -exec sed -i '' 's/$(domain)/localhost/g' {} \;
 
-everything: create-with-ingress argo-install argo-login argo-ui-localhost-port-forward argo-bootstrap-creds argo-bootstrap-apps replace-all-hostnames
+start: create-with-ingress argo-install argo-login argo-ui-localhost-port-forward argo-bootstrap-creds
